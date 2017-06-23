@@ -138,25 +138,56 @@ url_patterns = [
     )
 ]
 
+def download_urls_recorded(parsed, title, info_only, output_dir='.', 
+    refer=None, merge=True, faker=False, headers={}, **kwargs):
+    urls = parsed['urls']
+    urls_ordered = parsed['urls_ordered']
+    total = len(urls_ordered)
+    now = 1
+    for url in urls_ordered:
+        basename = match1(url, r'/([^\./]+)\.[^/]+$')
+        ext = match1(url, r'\.([^/]+)$')
+        if urls[url] == 0:
+            mime, ext, size = url_info(url)
+            title_indexed = title + ('[%d/%d]' % (now, total))
+            print_info('Flickr.com', title_indexed, mime, size)
+            if not info_only:
+                download_urls([url], basename, ext, False, output_dir, refer, merge, faker)
+                urls[url] = 1
+        else:
+            print('skip finished download: %s.%s.' % (basename, ext))
+        
+        now = now + 1
+
 def flickr_download_main(url, output_dir = '.', merge = False, info_only = False, **kwargs):
-    urls = None
     size = 'o' # works for collections only
     title = None
+    parsed = None
+
     if 'stream_id' in kwargs:
         size = kwargs['stream_id']
-    if match1(url, pattern_url_single_photo):
-        url, title = get_single_photo_url(url)
-        urls = [url]
-    else:
-        urls, title = fetch_photo_url_list(url, size)
-    index = 0
-    for url in urls:
-        mime, ext, size = url_info(url)
-        print_info('Flickr.com', title, mime, size)
-        if not info_only:
-            suffix = '[%d]' % index
-            download_urls([url], title + suffix, ext, False, output_dir, None, False, False)
-            index = index + 1
+    
+    list_path = os.path.join(output_dir, '$you-get-list.json')
+    if os.path.exists(list_path):
+        with open(list_path, 'r') as list_file:
+            parsed = json.loads(list_file.read())
+            title = parsed['title']
+    else:     
+        if match1(url, pattern_url_single_photo):
+            url, title = get_single_photo_url(url)
+            urls = [url]
+        else:
+            urls, title = fetch_photo_url_list(url, size)
+        parsed = {'title':title, 'urls':{url:0 for url in urls}, 'urls_ordered':urls}
+        with open(list_path, 'w') as list_file:
+            list_file.write(json.dumps(parsed, separators=(',', ':')))
+    try:
+        download_urls_recorded(parsed, title, info_only, output_dir, None, False, True)
+    except Exception as e:
+        print(e)
+    finally:        
+        with open(list_path, 'w') as list_file:
+            list_file.write(json.dumps(parsed, separators=(',', ':')))
 
 def fetch_photo_url_list(url, size):
     for pattern in url_patterns:
