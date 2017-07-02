@@ -132,6 +132,7 @@ class YouTube(VideoExtractor):
 
     def prepare(self, **kwargs):
         assert self.url or self.vid
+        ytplayer_config = None
 
         if not self.vid and self.url:
             self.vid = self.__class__.get_vid_from_url(self.url)
@@ -199,7 +200,7 @@ class YouTube(VideoExtractor):
             log.wtf('[Failed] Invalid status.')
 
         # YouTube Live
-        if ytplayer_config['args'].get('livestream') == '1' or ytplayer_config['args'].get('live_playback') == '1':
+        if ytplayer_config and (ytplayer_config['args'].get('livestream') == '1' or ytplayer_config['args'].get('live_playback') == '1'):
             hlsvp = ytplayer_config['args']['hlsvp']
 
             if 'info_only' in kwargs and kwargs['info_only']:

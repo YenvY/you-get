@@ -5,7 +5,9 @@ __all__ = ['flickr_download_main']
 from ..common import *
 
 import json
+import html
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 
 pattern_url_photoset = r'https?://www\.flickr\.com/photos/.+/(?:(?:sets)|(?:albums))?/([^/]+)'
 pattern_url_photostream = r'https?://www\.flickr\.com/photos/([^/]+)(?:/|(?:/page))?$'
@@ -143,7 +145,7 @@ url_patterns = [
 ]
 
 def get_filename(url):
-    return match1(url, r'/([^/]+)(?:\?.+)?$')
+    return match1(url, r'/([^/?]+)(?:\?.+)?$')
 
 def download_urls_recorded(parsed, title, info_only, output_dir='.', 
     refer=None, merge=True, faker=False, headers={}, **kwargs):
@@ -152,14 +154,13 @@ def download_urls_recorded(parsed, title, info_only, output_dir='.',
     total = len(urls_ordered)
     now = 1
     finished = 0
+    lock = Lock()
     def report(filename):
         nonlocal total, finished, output_dir
         digits = len(str(total))
         shorten_dir = (output_dir if len(output_dir) < 11 else output_dir[0:7] + '...').replace('\\', '/')
         print('[%%%dd/%%%dd]finished: %s' % (digits, digits, '%s') % (finished, total, shorten_dir + '/' + filename))
-    def fetch(url, index):
-        filename = match1(url, r'/([^/]+)(?:\?.+)?$')
-        filename = '%%0%dd_' % len(str(total)) % index + filename
+    def fetch(url, filename):
         path = os.path.join(output_dir, filename)
         if not info_only:
             try:
@@ -167,38 +168,71 @@ def download_urls_recorded(parsed, title, info_only, output_dir='.',
             except Exception as e:
                 print(e)
                 raise e
+            lock.acquire()
             urls[url] = 1
             nonlocal finished, report
             finished = finished + 1
             report(filename)
-        else:                
+            lock.release()
+        else:
             mime, ext, size = url_info(url)
             title_indexed = title + ('[%d/%d]' % (now, total))
+            lock.acquire()
             print_info('Flickr.com', title_indexed, mime, size)
+            lock.release()
     with ThreadPoolExecutor(max_workers=20) as executor:
+        print('Downloading %d items to %s' % (total, output_dir))
         for url in urls_ordered:
+            filename = '%%0%dd_' % len(str(total)) % now + get_filename(url)
             if urls[url] == 0:
-                executor.submit(fetch, url, now)
+                executor.submit(fetch, url, filename)
             else:
-                print('skip finished download: %s.' % get_filename(url))
+                print('skip finished download: %s.' % filename)
                 finished = finished + 1
             now = now + 1
 
 def filter_path(path):
-    print (path)
-    return ''.join([c if c not in r'\\/!@#$%^&*(){}[]:;\'\"|<>,\.?' else '_' for c in path])
+    return ''.join([c if c not in r'\\/!@#$%^&*()={}[]:;\'\"|<>,\.?' else '_' for c in path])
+
+def is_final_dir(path):
+    return path[:-1] not in '\\/'
+
+def make_output_dir(output_dir, title, backname):
+    tmp_dir = ''
+    if not is_final_dir(output_dir):
+        append = filter_path(html.unescape(title)).strip()
+        if append == '':
+            append = backname
+        if len(append) > 64:
+            append = append[:63]
+        tmp_dir = os.path.join(output_dir, append)
+        trys = 1
+        while os.path.exists(tmp_dir):
+            tmp_dir = os.path.join(output_dir, append + '_' + str(trys))
+            trys = trys + 1
+        try:
+            os.makedirs(tmp_dir)
+        except:
+            tmp_dir = os.path.join(output_dir, backname)
+            os.makedirs(tmp_dir)
+        return tmp_dir
+    else:
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        return output_dir
+        
 
 def flickr_download_main(url, output_dir = '.', merge = False, info_only = False, **kwargs):
     size = 'o' # works for collections only
     parsed = None
     backname = None
-    append_path = ''
+    title = None
 
     if 'stream_id' in kwargs:
         size = kwargs['stream_id']
     
     list_path = os.path.join(output_dir, '$you-get-list.json')
-    if os.path.exists(list_path):
+    if is_final_dir(output_dir) and os.path.exists(list_path):
         with open(list_path, 'r') as list_file:
             parsed = json.loads(list_file.read())
             title = parsed['title']
@@ -217,30 +251,7 @@ def flickr_download_main(url, output_dir = '.', merge = False, info_only = False
         parsed = {'title':title, 'url':url, 'urls':{url:0 for url in urls}, 'urls_ordered':urls}
 
         # resolve output_dir
-        if output_dir == '.' or output_dir[-1:] in '\\/':
-            append_path = filter_path(title)
-            print (append_path)
-            if len(append_path) > 64:
-                append_path = append_path[0:127]        
-        
-        if append_path == '':
-            append_path = backname
-        output_dir_new = os.path.join(output_dir, append_path)
-        trys = 1
-        while os.path.exists(output_dir_new):
-            output_dir_new = os.path.join(output_dir, append_path) + '_' + str(trys)
-            trys = trys + 1
-        try:
-            os.makedirs(output_dir_new)
-            output_dir = output_dir_new
-        except:
-            trys = 1
-            output_dir_new = os.path.join(output_dir, backname)
-            while os.path.exists(output_dir_new):
-                output_dir_new = os.path.join(output_dir, backname) + '_' + str(trys)
-                tyrs = trys + 1
-            os.makedirs(output_dir_new)
-            output_dir = output_dir_new
+        output_dir = make_output_dir(output_dir, title, backname)
 
         list_path = os.path.join(output_dir, '$you-get-list.json')
         with open(list_path, 'w') as list_file:
